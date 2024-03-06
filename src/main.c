@@ -47,10 +47,17 @@ int num_clients = 0;
 pthread_mutex_t num_clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // create semaphores of resources
-sem_t cut_chairs_barbers;
-sem_t cut_chairs_clients;
-sem_t wait_chairs;
-sem_t comb_scissors;
+struct {
+    pthread_mutex_t mutex;
+    sem_t full;
+    sem_t empty;
+    int in;
+    int out;
+    int buffer[NUM_WAIT_CHAIRS];
+} wait_chairs;
+
+sem_t scissors;
+sem_t combs;
 
 int main(int argc, char **argv) {
     if (argc < 2 || strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
@@ -60,15 +67,23 @@ int main(int argc, char **argv) {
 
     srand(time(NULL)); // seed random number generator
 
-    // initialize all semaphores
-    sem_init(&cut_chairs_barbers, 0, 0);
-    sem_init(&cut_chairs_clients, 0, NUM_BARBERS);
-    sem_init(&wait_chairs, 0, NUM_WAIT_CHAIRS);
-    sem_init(&comb_scissors, 0, NUM_COMB_SCISSORS);
+    // initialize wait_chairs
+    pthread_mutex_init(&(wait_chairs.mutex), NULL);
+    wait_chairs.in = 0;
+    wait_chairs.out = 0;
+    sem_init(&(wait_chairs.full), 0, 0);
+    sem_init(&(wait_chairs.empty), 0, NUM_WAIT_CHAIRS);
 
+    // initialize all semaphores
+    sem_init(&scissors, 0, NUM_COMB_SCISSORS);
+    sem_init(&combs, 0, NUM_COMB_SCISSORS);
+
+    // get extra arguments
     int simulation_duration = atoi(argv[1]);
     int simulation_endtime = time(NULL) + simulation_duration;
     int simulation_timestep;
+
+    printf("Initializing simulation of %i seconds...\n", simulation_duration);
 
     pthread_mutex_lock(&simulation_status_mutex);
 
@@ -82,15 +97,12 @@ int main(int argc, char **argv) {
     do {
         // all simulation is inside here
         for (int i = 0; i < get_next_round_num_clients(); i++) {
-            int *id = malloc(sizeof(int));
-            *id = i;
-            // create clients (threads) for this iteration
             pthread_mutex_lock(&num_clients_mutex); // num_clients has to be a mutex
+            int *id = malloc(sizeof(int));
+            *id = num_clients;
             pthread_create(&clients[num_clients++], NULL, client_action, id);
             pthread_mutex_unlock(&num_clients_mutex);
         }
-
-        
 
         // wait some time for the next iteration
         #ifdef _WIN32 || _WIN64
@@ -120,64 +132,87 @@ int main(int argc, char **argv) {
     return 0;
 }
 
+// Producer
 void * client_action(void *args) {
     int *id = (int *) args;
-
+    int cut_time;
+    
     if (sem_trywait(&wait_chairs)) {
         //Função de acesso a recurso de cadeira de espera
-        
-        print("Client %i: Waiting in the waiting chairs...\n", *id);
+        printf("Client %i: Waiting in the waiting chairs...\n", *id);
         fflush(stdout);
-        
-        sem_wait(&cut_chairs_clients);
-        sem_post(&wait_chairs);
 
-        sem_post(&cut_chairs_barbers);
+        cut_time = get_cut_hair_duration();
+
+        pthread_mutex_lock(&(wait_chairs.mutex));
+        while (sem_trywait(&(wait_chairs.full)) != 0) {
+            pthread_mutex_unlock(&(wait_chairs.mutex));
+            #ifdef _WIN32 || _WIN64
+                Sleep(1 * 1000); // sleep in miliseconds
+            #else
+                sleep(1); // sleep in seconds
+            #endif
+            pthread_mutex_lock(&(wait_chairs.mutex));
+        } // decrease occupied chairs
+        sem_wait(&(wait_chairs.empty));
+        wait_chairs.buffer[wait_chairs.in];
+        wait_chairs.in += 1;
+        sem_post(&(wait_chairs.full));
+        pthread_mutex_unlock(&(wait_chairs.mutex));
 
         printf("Client %i: Cutting the hair...\n", *id);
         fflush(stdout);
 
-        // cutting the hair...
-        #ifdef _WIN32 || _WIN64
-            Sleep(get_cut_hair_duration() * 1000); // sleep in miliseconds
-        #else
-            sleep(get_cut_hair_duration()); // sleep in seconds
-        #endif
-
-        sem_post(&cut_chairs_clients);
     } else {
-        print("The client %i left the barbershop!\n", *id);
+        printf("The client %i has left the barbershop!\n", *id);
         fflush(stdout);
     }
-    
-    // decrease number of clients
-    pthread_mutex_lock(&num_clients_mutex);
-    num_clients--;
-    pthread_mutex_unlock(&num_clients_mutex);
     
     free(id);
 
     return NULL;
 }
 
+// Consumer
 void * barber_action(void *args) {
     int *id = (int *) args;
+    int cut_time;
 
     while (pthread_mutex_trylock(&simulation_status_mutex) == -1) {
         printf("Barber %i is sleeping...", *id);
         fflush(stdout);
 
-        sem_wait(&cut_chairs_barbers);
+        pthread_mutex_lock(&(wait_chairs.mutex)); // blocking producer-consumer
+        while (sem_trywait(&(wait_chairs.full)) != 0) {
+            pthread_mutex_unlock(&(wait_chairs.mutex));
+            #ifdef _WIN32 || _WIN64
+                Sleep(1 * 1000); // sleep in miliseconds
+            #else
+                sleep(1); // sleep in seconds
+            #endif
+            pthread_mutex_lock(&(wait_chairs.mutex));
+        } // decrease occupied chairs
+        cut_time = wait_chairs.buffer[wait_chairs.out]; // get cut time generated by client
+        wait_chairs.out -= 1; // move consumer's pointer
+        sem_post(&(wait_chairs.empty)); // increase empty chairs
+        pthread_mutex_unlock(&(wait_chairs.mutex)); // unlock producer-consumer
 
-        sem_wait(&comb_scissors);
+        printf("Chegou aqui!");
 
-        // problema: como o barbeiro vai saber quanto tempo vai levar para contar o cabelo do cliente?
-        // possivel solucao: produtor-consumidor
+        sem_wait(&scissors); // get scissors
+        sem_wait(&combs); // get comb
 
-        printf("Barber %i is cutting the client hair...\n", *id);
+        printf("Barber %i is cutting the client hair for %i seconds...\n", *id, cut_time);
         fflush(stdout);
 
-        sem_post(&comb_scissors);
+        #ifdef _WIN32 || _WIN64
+            Sleep(cut_time * 1000); // sleep in miliseconds
+        #else
+            sleep(cut_time); // sleep in seconds
+        #endif
+
+        sem_post(&scissors); // return scissors
+        sem_post(&combs); // return comb
     }
 
     free(id);
