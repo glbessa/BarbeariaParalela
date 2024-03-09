@@ -7,7 +7,7 @@
 #include <semaphore.h>
 
 // work on linux and windows :)
-#ifdef _WIN32 || _WIN64
+#if defined(_WIN32) || defined(_WIN64)
     #include <Windows.h>
 #else
     #include <unistd.h>
@@ -30,20 +30,22 @@
 #define NUM_WAIT_CHAIRS 16
 #define NUM_COMB_SCISSORS (NUM_BARBERS / 2)
 #define NUM_MAX_CLIENTS 1000
+#define LENGTH_NAMES_LIST 50
+#define NAME_LENGTH 50
 
+void initialize();
 void * client_action(void *args);
 void * barber_action(void *args);
-
-typedef struct ClientArgs ClientArgs;
-struct ClientArgs {
-    int *id;
-};
 
 // create thread buffers
 pthread_t barbers[NUM_BARBERS];
 pthread_t clients[NUM_MAX_CLIENTS];
 int num_clients = 0;
+int num_clients_served = 0;
+int num_abandoning_clients = 0;
 pthread_mutex_t num_clients_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t num_clients_served_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t num_abandoning_clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // create semaphores of resources
 struct {
@@ -51,8 +53,10 @@ struct {
     sem_t full;
     sem_t empty;
     int pos;
-    int buffer[NUM_WAIT_CHAIRS];
-} wait_chairs;
+    int buffer[NUM_BARBERS];
+} cutting_chairs;
+
+sem_t waiting_chairs;
 
 sem_t scissors;
 sem_t combs;
@@ -65,15 +69,7 @@ int main(int argc, char **argv) {
 
     srand(time(NULL)); // seed random number generator
 
-    // initialize wait_chairs
-    pthread_mutex_init(&(wait_chairs.mutex), NULL);
-    wait_chairs.pos = 0;
-    sem_init(&(wait_chairs.full), 0, 0);
-    sem_init(&(wait_chairs.empty), 0, NUM_WAIT_CHAIRS);
-
-    // initialize all semaphores
-    sem_init(&scissors, 0, NUM_COMB_SCISSORS);
-    sem_init(&combs, 0, NUM_COMB_SCISSORS);
+    initialize();
 
     // get extra arguments
     int simulation_duration = atoi(argv[1]);
@@ -100,7 +96,7 @@ int main(int argc, char **argv) {
         }
 
         // wait some time for the next iteration
-        #ifdef _WIN32 || _WIN64
+        #if defined(_WIN32) || defined(_WIN64)
             Sleep(get_next_round_clients_delay() * 1000); // sleep in miliseconds
         #else
             sleep(get_next_round_clients_delay()); // sleep in seconds
@@ -109,34 +105,66 @@ int main(int argc, char **argv) {
         simulation_timestep = time(NULL); // update actual time
     } while (simulation_timestep < simulation_endtime);
 
+    print_stats(num_clients, num_clients_served, num_abandoning_clients);
+
     // destroy everything
+    sem_destroy(&(cutting_chairs.full));
+    sem_destroy(&(cutting_chairs.empty));
+    sem_destroy(&(scissors));
+    sem_destroy(&(combs));
+
+    pthread_mutex_destroy(&num_clients_mutex);
+    pthread_mutex_destroy(&(cutting_chairs.mutex));
 
     return 0;
+}
+
+void initialize() {
+    // initialize cutting_chairs
+    pthread_mutex_init(&(cutting_chairs.mutex), NULL);
+    cutting_chairs.pos = 0;
+    sem_init(&(cutting_chairs.full), 0, 0);
+    sem_init(&(cutting_chairs.empty), 0, NUM_BARBERS);
+
+    // initialize all semaphores
+    sem_init(&waiting_chairs, 0, NUM_WAIT_CHAIRS);
+    sem_init(&scissors, 0, NUM_COMB_SCISSORS);
+    sem_init(&combs, 0, NUM_COMB_SCISSORS);
 }
 
 // Producer
 void * client_action(void *args) {
     int *id = (int *) args;
     int cut_time;
-    
-    if (sem_trywait(&wait_chairs)) {
+
+    if (sem_trywait(&(waiting_chairs)) == 0) {
         //Função de acesso a recurso de cadeira de espera
-        printf("Client %i: Waiting in the waiting chairs...\n", *id);
+        printf("Client %i is waiting in the waiting chairs...\n", *id);
         fflush(stdout);
 
         cut_time = get_cut_hair_duration();
 
-        sem_wait(&(wait_chairs.empty));
-        pthread_mutex_lock(&(wait_chairs.mutex));
-        wait_chairs.buffer[wait_chairs.pos] = cut_time;
-        wait_chairs.pos += 1;
-        pthread_mutex_unlock(&(wait_chairs.mutex));
-        sem_post(&(wait_chairs.full));
+        sem_wait(&(cutting_chairs.empty));
+        pthread_mutex_lock(&(cutting_chairs.mutex));
+        cutting_chairs.buffer[cutting_chairs.pos] = cut_time;
+        cutting_chairs.pos += 1;
+        pthread_mutex_unlock(&(cutting_chairs.mutex));
+        sem_post(&(cutting_chairs.full));
 
-        printf("Client %i: Cutting the hair...\n", *id);
+        sem_post(&waiting_chairs);
+
+        pthread_mutex_lock(&num_clients_served_mutex);
+        num_clients_served += 1;
+        pthread_mutex_unlock(&num_clients_served_mutex);
+
+        printf("Client %i will cut its hair...\n", *id);
         fflush(stdout);
 
     } else {
+        pthread_mutex_lock(&num_abandoning_clients_mutex);
+        num_abandoning_clients += 1;
+        pthread_mutex_unlock(&num_abandoning_clients_mutex);
+
         printf("The client %i has left the barbershop!\n", *id);
         fflush(stdout);
     }
@@ -155,12 +183,12 @@ void * barber_action(void *args) {
         printf("Barber %i is sleeping...\n", *id);
         fflush(stdout);
 
-        sem_wait(&(wait_chairs.full));
-        pthread_mutex_lock(&(wait_chairs.mutex)); // blocking producer-consumer
-        cut_time = wait_chairs.buffer[wait_chairs.pos]; // get cut time generated by client
-        wait_chairs.pos -= 1; // move consumer's pointer
-        pthread_mutex_unlock(&(wait_chairs.mutex)); // unlock producer-consumer
-        sem_post(&(wait_chairs.empty)); // increase empty chairs
+        sem_wait(&(cutting_chairs.full));
+        pthread_mutex_lock(&(cutting_chairs.mutex)); // blocking producer-consumer
+        cut_time = cutting_chairs.buffer[cutting_chairs.pos]; // get cut time generated by client
+        cutting_chairs.pos -= 1; // move consumer's pointer
+        pthread_mutex_unlock(&(cutting_chairs.mutex)); // unlock producer-consumer
+        sem_post(&(cutting_chairs.empty)); // increase empty chairs
 
         sem_wait(&scissors); // get scissors
         sem_wait(&combs); // get comb
@@ -168,7 +196,7 @@ void * barber_action(void *args) {
         printf("Barber %i is cutting the client hair for %i seconds...\n", *id, cut_time);
         fflush(stdout);
 
-        #ifdef _WIN32 || _WIN64
+        #if defined(_WIN32) || defined(_WIN64)
             Sleep(cut_time * 1000); // sleep in miliseconds
         #else
             sleep(cut_time); // sleep in seconds
