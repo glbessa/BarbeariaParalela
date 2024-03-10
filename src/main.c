@@ -28,7 +28,7 @@
 
 #define NUM_BARBERS 8
 #define NUM_WAIT_CHAIRS 16
-#define NUM_COMB_SCISSORS 0
+#define NUM_COMB_SCISSORS 4
 #define NUM_MAX_CLIENTS 1000
 
 void initialize();
