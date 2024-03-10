@@ -12,11 +12,11 @@ int get_cut_hair_duration() {
 }
 
 int get_next_round_clients_delay() {
-    return rand() % 8 + 3;
+    return rand() % 6 + 1;
 }
 
 int get_next_round_num_clients() {
-    return rand() % 5 + 1;
+    return rand() % 31 + 10;
 }
 
 void print_help() {
@@ -24,7 +24,7 @@ void print_help() {
 }
 
 void print_stats(int total_clients, int clients_served, int abandoning_clients) {
-    printf("Número total de clientes: %i\nNúmero de clientes atendidos: %i\nNúmeros de clientes não atendidos: %i\n", total_clients, clients_served, abandoning_clients);
+    printf("Número total de clientes: %i\nNúmero de clientes atendidos: %i\nNúmero de clientes não atendidos: %i\nNúmero de clientes em atendimento: %i\n", total_clients, clients_served, abandoning_clients, total_clients - clients_served - abandoning_clients);
 }
 
 
