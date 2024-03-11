@@ -17,7 +17,7 @@
 
 // Quantidade de cadeiras de barbear: 8
 // Quantidade de barbeiros: 8
-// Quantidade de clientes: Máximo 5 clientes num intervalo de 1 até 10 segundos
+// Quantidade de clientes: Entre 10 e 30 clientes num intervalo de 1 até 5 segundos
 // Quantidade de cadeiras da sala de espera: 16
 // Quantidade de pentes: 4
 // Quantidade de tesouras: 4

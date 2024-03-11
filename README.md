@@ -1,5 +1,7 @@
 # Barbearia Paralela
 
+Autores: Gabriel Leite Bessa e Pedro Henrique Lima de Mesquita
+
 Software desenvolvido como trabalho final da disciplina de sistemas operacionais.
 
 ## Descrição

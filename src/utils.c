@@ -8,7 +8,7 @@
 #include <stdio.h>
 
 int get_cut_hair_duration() {
-    return rand() % 4 + 3;
+    return rand() % 7 + 3;
 }
 
 int get_next_round_clients_delay() {
